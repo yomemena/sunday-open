@@ -19,8 +19,11 @@ template = template.replace(/const KEY='[^']+'/, `const KEY='${key}'`)
   .replace(/const SYNC_URL='[^']+'/, `const SYNC_URL='${config.endpoint}'`)
   .replace(/<title>[^<]*<\/title>/, '<title>Sunday Open TEST</title>')
   .replace('<body>', '<body><div style="position:sticky;top:0;z-index:9999;background:#8b2c05;color:white;padding:12px 20px;text-align:center;font:bold 15px sans-serif">ТЕСТОВАЯ ВЕРСИЯ · Отдельная копия данных · Здесь можно проверять сохранения и конфликты</div>');
-const html = source.replace(pattern, (_, start, text, end) => start + JSON.stringify(template) + end)
+// HTML closes a script element even when </script> occurs inside a JSON string.
+const encoded = JSON.stringify(template).replace(/</g, '\\u003c');
+const html = source.replace(pattern, (_, start, text, end) => start + encoded + end)
   .replace(/<title>[^<]*<\/title>/, '<title>Sunday Open TEST</title>');
+assert.equal(JSON.parse(html.match(pattern)[2]), template, 'Embedded template must survive HTML parsing');
 assert(!html.includes(oldUrl), 'Production endpoint must be absent from the test site');
 assert(!template.includes("const KEY='sunday-open-workspace-v1'"));
 const out = path.join(root, '.preview');
