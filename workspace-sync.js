@@ -1,7 +1,7 @@
 /* Shared rows use optimistic concurrency; drafts remain on this device. */
 class WorkspaceSync {
-  constructor({key, url, initialData, shared, onChange}) {
-    Object.assign(this, {key, url, shared, onChange});
+  constructor({key, url, initialData, shared, onChange, protocol = 3}) {
+    Object.assign(this, {key, url, shared, onChange, protocol});
     this.defaults = Object.fromEntries(Object.entries(initialData).map(([t, rows]) =>
       [t, rows.map((row, i) => ({...row, _id: row._id || t + '-' + i, _o: row._o ?? i}))]));
     this.data = this.copy(this.defaults);
@@ -40,6 +40,10 @@ class WorkspaceSync {
 
   adopt(record) {
     for (const k of ['data', 'base', 'versions', 'pending']) this[k] = this.copy(record[k]);
+    // Preserve operation identity when restoring a draft from before moderation.
+    if (this.protocol === 4) for (const pending of Object.values(this.pending)) {
+      if (pending.request?.protocol === 3) pending.request.protocol = 4;
+    }
     this.tab = record.tab || 'start';
     this.volRatio = record.volRatio || 20;
   }
@@ -113,6 +117,8 @@ class WorkspaceSync {
     const conflicts = [...new Set(Object.values(this.pending).filter(p => p.conflict).map(p => p.table))];
     let sync = !this.url ? 'local' : !this.loaded ? 'loading' : 'ok';
     if (this.hasPending() && this.url) sync = this.writing ? 'saving' : 'pending';
+    if (!this.writing && this.hasPending() && Object.values(this.pending).every(p => p.awaiting)) sync = 'approval';
+    if (Object.values(this.pending).some(p => p.rejected)) sync = 'rejected';
     if (this.networkError) sync = 'err';
     if (this.upgrade) sync = 'upgrade';
     if (conflicts.length) sync = 'conflict';
@@ -146,6 +152,9 @@ class WorkspaceSync {
           baseRow: this.copy(this.base[table].find(r => r._id === id) || null)};
         pending.row = this.copy(row);
         pending.del = !row;
+        if (pending.rejected) {
+          delete pending.rejected; delete pending.awaiting; delete pending.request;
+        }
         this.pending[key] = pending;
       }
     }
@@ -181,7 +190,7 @@ class WorkspaceSync {
       const result = await this.json();
       if (!this.active || epoch !== (this.readEpoch || 0)) return;
       if (!result || !result.data || typeof result.data !== 'object' || Array.isArray(result.data)) throw new Error('Invalid data');
-      const modern = result.protocol === 3 && result.ok === true;
+      const modern = result.protocol === this.protocol && result.ok === true;
       if (modern && !this.shared.every(t => {
         const tb = result.data[t];
         return !tb || tb.rows && !Array.isArray(tb.rows) && Array.isArray(tb.deleted) && tb.deletedVersions &&
@@ -254,10 +263,12 @@ class WorkspaceSync {
 
   async flush() {
     if (!this.active || !this.ready || this.writing || this.storageError) return;
-    const key = Object.keys(this.pending).find(k => !this.pending[k].conflict && this.pending[k].baseVersion !== null);
+    const candidates = Object.keys(this.pending).filter(k => !this.pending[k].conflict && !this.pending[k].rejected && this.pending[k].baseVersion !== null);
+    const key = candidates.find(k => !this.pending[k].awaiting) || candidates.sort((a, b) =>
+      (this.pending[a].checkedAt || 0) - (this.pending[b].checkedAt || 0))[0];
     if (!key) return;
     const pending = this.pending[key], t = pending.table, id = pending.id;
-    if (!pending.request) pending.request = {protocol: 3, table: t, id, baseVersion: pending.baseVersion,
+    if (!pending.request) pending.request = {protocol: this.protocol, table: t, id, baseVersion: pending.baseVersion,
       row: this.copy(pending.row), del: pending.del, mutationId: crypto.randomUUID()};
     if (!this.persist()) { this.publish(); return; }
     const request = this.copy(pending.request);
@@ -267,7 +278,21 @@ class WorkspaceSync {
     try {
       const result = await this.json({method: 'POST', headers: {'Content-Type': 'text/plain;charset=utf-8'}, body: JSON.stringify(request)});
       if (!this.active) return;
-      if (result?.protocol !== 3 || result.table !== t || result.id !== id || result.mutationId !== request.mutationId ||
+      if (result?.protocol !== this.protocol || result.table !== t || result.id !== id || result.mutationId !== request.mutationId) throw new Error('Invalid acknowledgement');
+      if (this.protocol === 4 && result.status === 'pending' && result.ok === true) {
+        pending.awaiting = true; pending.checkedAt = Date.now();
+        this.networkError = false; this.persist(); retry = true;
+        return;
+      }
+      if (this.protocol === 4 && result.status === 'rejected' && result.ok === false && result.error === 'rejected') {
+        if (pending.del !== request.del || !this.equal(pending.row, request.row)) {
+          delete pending.request; delete pending.awaiting;
+        } else pending.rejected = true;
+        this.networkError = false; this.persist();
+        return;
+      }
+      if (this.protocol === 4 && !['approved', 'conflict'].includes(result.status)) throw new Error('Invalid review status');
+      if (
           !Number.isSafeInteger(result.version) || typeof result.deleted !== 'boolean' ||
           (result.deleted ? result.row !== null : result.row?._id !== id)) throw new Error('Invalid acknowledgement');
       if (result.ok === false && result.error === 'conflict' && result.version > request.baseVersion) {
@@ -281,7 +306,7 @@ class WorkspaceSync {
         else {
           pending.baseVersion = result.version;
           pending.baseRow = this.copy(result.row);
-          delete pending.request;
+          delete pending.request; delete pending.awaiting;
         }
         this.syncAt = new Date().toLocaleTimeString('ru-RU', {hour: '2-digit', minute: '2-digit'});
       }
@@ -291,7 +316,8 @@ class WorkspaceSync {
     finally {
       this.writing = false;
       this.publish();
-      this.schedule(retry ? 5000 : 0);
+      const unsent = Object.values(this.pending).some(p => !p.awaiting && !p.conflict && !p.rejected);
+      this.schedule(retry && (this.networkError || !unsent) ? 5000 : 0);
     }
   }
 

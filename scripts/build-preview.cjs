@@ -20,6 +20,7 @@ const sync = fs.readFileSync(path.join(root, 'workspace-sync.js'), 'utf8');
 const offline = fs.readFileSync(path.join(root, 'preview/offline.js'), 'utf8');
 const worker = fs.readFileSync(path.join(root, 'preview/offline-sw.js'), 'utf8');
 template = template.replace(/const KEY='[^']+'/, `const KEY='${key}'`)
+  .replace('new WorkspaceSync({key:KEY', 'new WorkspaceSync({protocol:4,key:KEY')
   .replace(/const SYNC_URL='[^']+'/, `const SYNC_URL='${config.endpoint}'`)
   .replace(/<title>[^<]*<\/title>/, '<title>Sunday Open TEST</title>')
   .replace('</head>', '<script src="./preview-offline.__PREVIEW_VERSION__.js"></script></head>')
@@ -32,6 +33,7 @@ let html = source.replace(pattern, (_, start, text, end) => start + encoded + en
 assert.equal(JSON.parse(html.match(pattern)[2]), template, 'Embedded template must survive HTML parsing');
 assert(!html.includes(oldUrl), 'Production endpoint must be absent from the test site');
 assert(!template.includes("const KEY='sunday-open-workspace-v1'"));
+assert(template.includes('new WorkspaceSync({protocol:4,key:KEY'), 'Test client must require moderated protocol 4');
 const version = createHash('sha256').update(html).update(sync).update(offline).update(worker).digest('hex').slice(0, 16);
 html = html.replaceAll('__PREVIEW_VERSION__', version);
 const out = path.join(root, '.preview');

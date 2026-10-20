@@ -7,9 +7,11 @@ const clone = value => JSON.parse(JSON.stringify(value));
 function server(seed, legacy) {
   const sheets = new Map(), properties = new Map(), posts = [];
   let locked = false;
-  const backend = {posts, sheets, properties, failProjection: false};
+  const backend = {posts, sheets, properties, failProjection: false, actor: '', selectedRow: 2};
   function sheet(name, rows = []) {
-    const value = {name, rows: clone(rows), setFrozenRows() {}, getLastRow() { return this.rows.length; },
+    const value = {name, rows: clone(rows), getName() { return name; },
+      getActiveRange: () => ({getRow: () => backend.selectedRow, getNumRows: () => 1}),
+      setFrozenRows() {}, getLastRow() { return this.rows.length; },
       appendRow(row) {
         if (!locked) throw new Error('Write without lock');
         if (name === 'Data' && this.rows.length && backend.failProjection) { backend.failProjection = false; throw new Error('projection interrupted'); }
@@ -30,9 +32,11 @@ function server(seed, legacy) {
   }
   if (legacy) sheet('SharedTabs', legacy);
   sheet('History', [['log_id', 'timestamp', 'user_id', 'action', 'entity_type', 'details'], ['old-log', '', '', '', '', 'preserve me']]);
-  const spreadsheet = {getSheetByName: name => sheets.get(name), insertSheet: name => sheet(name)};
+  const spreadsheet = {getSheetByName: name => sheets.get(name), insertSheet: name => sheet(name),
+    getId: () => context.SUNDAY_SPREADSHEET_ID, getActiveSheet: () => sheets.get('SundayProposals')};
   const context = vm.createContext({Date, JSON, Object, Number, Error,
-    SpreadsheetApp: {openById: () => spreadsheet, flush() {}},
+    SpreadsheetApp: {openById: () => spreadsheet, getActiveSpreadsheet: () => spreadsheet, flush() {}},
+    Session: {getActiveUser: () => ({getEmail: () => backend.actor})},
     LockService: {getScriptLock: () => ({
       tryLock() { if (locked) return false; locked = true; return true; },
       waitLock() { if (locked) throw new Error('busy'); locked = true; }, releaseLock() { locked = false; }
@@ -46,6 +50,14 @@ function server(seed, legacy) {
   if (seed) context.SUNDAY_SEED = clone(seed);
   const decode = result => JSON.parse(result.text);
   Object.assign(backend, {context, sheet, setup: () => context.setupSundayOpen(),
+    moderate: (mutationId, approve = true) => {
+      backend.selectedRow = sheets.get('SundayProposals').rows.findIndex(r => r[0] === mutationId) + 1;
+      return approve ? context.approveSundayProposal() : context.rejectSundayProposal();
+    },
+    enableModeration: (email = 'moderator@example.com') => {
+      backend.actor = email; properties.set('SUNDAY_MODERATOR_EMAILS', JSON.stringify([email]));
+      return context.setupSundayModeration();
+    },
     get: () => decode(context.doGet()), post: op => decode(context.doPost({postData: {contents: JSON.stringify(op)}})),
     response: json => ({ok: true, json: async () => clone(json)}),
     rows: t => Object.values(backend.get().data[t].rows).map(x => x.row),

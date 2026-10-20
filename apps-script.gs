@@ -3,6 +3,11 @@
 var SUNDAY_SPREADSHEET_ID = '1Z0-M7YVVZqGpFVCQXRXdZwjF-T3G5qxgkCFTU3QbJX0';
 var SUNDAY_DATA = ['table', 'id', 'version', 'json', 'deleted', 'updatedAt'];
 var SUNDAY_HISTORY = ['mutationId', 'hash', 'time', 'table', 'id', 'action', 'baseVersion', 'version', 'before', 'after'];
+var SUNDAY_PROPOSALS = ['mutationId', 'hash', 'createdAt', 'table', 'id', 'baseVersion', 'before', 'after', 'delete', 'status', 'reviewedAt', 'reviewedBy', 'reason'];
+
+function sundayModerated_() {
+  return PropertiesService.getScriptProperties().getProperty('SUNDAY_MODERATION') === '4';
+}
 
 function sundaySheet_(ss, name, headers, create) {
   var sheet = ss.getSheetByName(name);
@@ -108,10 +113,11 @@ function sundayApply_(state, op) {
 }
 
 function sundayWithLock_(fn) {
+  var protocol = sundayModerated_() ? 4 : 3;
   var lock = LockService.getScriptLock();
-  if (!lock.tryLock(20000)) return sundayJson_({protocol: 3, ok: false, error: 'busy'});
+  if (!lock.tryLock(20000)) return sundayJson_({protocol: protocol, ok: false, error: 'busy'});
   try { return sundayJson_(fn()); }
-  catch (error) { return sundayJson_({protocol: 3, ok: false, error: String(error)}); }
+  catch (error) { return sundayJson_({protocol: protocol, ok: false, error: String(error)}); }
   finally { lock.releaseLock(); }
 }
 
@@ -128,20 +134,135 @@ function doGet() {
       else tb.rows[r.id] = {row: r.row, v: r.version};
     });
     SpreadsheetApp.flush();
-    return {protocol: 3, ok: true, data: data};
+    return {protocol: sundayModerated_() ? 4 : 3, ok: true, data: data};
   });
 }
 
 function doPost(e) {
   return sundayWithLock_(function () {
     var op = JSON.parse(e && e.postData && e.postData.contents || 'null');
-    if (!op || op.protocol !== 3) return {protocol: 3, ok: false, error: 'upgrade_required'};
+    var protocol = sundayModerated_() ? 4 : 3;
+    if (!op || op.protocol !== protocol) return {protocol: protocol, ok: false, error: 'upgrade_required'};
     if (PropertiesService.getScriptProperties().getProperty('SUNDAY_READY') !== '3') throw new Error('Run setupSundayOpen first');
     var state = sundayRead_(SpreadsheetApp.openById(SUNDAY_SPREADSHEET_ID));
-    var result = sundayApply_(state, op);
+    var result = protocol === 4 ? sundayPropose_(state, op) : sundayApply_(state, op);
     SpreadsheetApp.flush();
     return result;
   });
+}
+
+function sundayReviewUser_() {
+  var email = Session.getActiveUser().getEmail().trim().toLowerCase();
+  var allowed = JSON.parse(PropertiesService.getScriptProperties().getProperty('SUNDAY_MODERATOR_EMAILS') || '[]');
+  if (!email || !Array.isArray(allowed) || !allowed.some(function (x) { return typeof x === 'string' && x.trim().toLowerCase() === email; })) {
+    throw new Error('Only a configured moderator with a verified Google account can review changes');
+  }
+  return email;
+}
+
+function setupSundayModeration() {
+  sundayReviewUser_();
+  setupSundayOpen();
+  var lock = LockService.getScriptLock(); lock.waitLock(20000);
+  try {
+    sundaySheet_(SpreadsheetApp.openById(SUNDAY_SPREADSHEET_ID), 'SundayProposals', SUNDAY_PROPOSALS, true);
+    SpreadsheetApp.flush();
+    PropertiesService.getScriptProperties().setProperty('SUNDAY_MODERATION', '4');
+    return 'Moderation ready. Reload the private spreadsheet to see the Sunday Open menu.';
+  } finally { lock.releaseLock(); }
+}
+
+function sundayProposal_(line) {
+  var op = {protocol: 4, mutationId: line[0], table: line[3], id: line[4], baseVersion: Number(line[5]),
+    del: line[8] === true || line[8] === 'TRUE', row: line[8] === true || line[8] === 'TRUE' ? null : JSON.parse(line[7])};
+  sundayValidate_(op);
+  if (sundayHash_(op) !== line[1]) throw new Error('Invalid proposal hash');
+  return op;
+}
+
+function sundayDecision_(state, sheet, index, line) {
+  var op = sundayProposal_(line);
+  if (line[9] === 'approving') {
+    // The moderator's durable decision is written BEFORE the journal operation.
+    // A retry can finish a partially applied approval without a second publication.
+    if (!line[10] || !line[11]) throw new Error('Approval has no reviewer');
+    var result = sundayApply_(state, op);
+    SpreadsheetApp.flush();
+    line[9] = result.ok ? 'approved' : 'conflict';
+    line[12] = result.ok ? '' : 'The published row changed; submit a new proposal';
+    sheet.getRange(index, 1, 1, SUNDAY_PROPOSALS.length).setValues([line]);
+  }
+  if (line[9] === 'approved') {
+    var receipt = state.receipts[op.mutationId];
+    if (!receipt || receipt.hash !== line[1]) throw new Error('Approved proposal has no journal receipt');
+    return Object.assign(sundayReply_(op, receipt.record, true), {protocol: 4, status: 'approved'});
+  }
+  if (line[9] === 'conflict') {
+    return Object.assign(sundayReply_(op, state.records[op.table + '|' + op.id], false), {protocol: 4, status: 'conflict'});
+  }
+  if (line[9] !== 'pending' && line[9] !== 'rejected') throw new Error('Invalid proposal status');
+  return {protocol: 4, ok: line[9] === 'pending', status: line[9], table: op.table, id: op.id,
+    mutationId: op.mutationId, error: line[9] === 'rejected' ? 'rejected' : null};
+}
+
+function sundayPropose_(state, op) {
+  sundayValidate_(op);
+  var ss = SpreadsheetApp.openById(SUNDAY_SPREADSHEET_ID);
+  var sheet = sundaySheet_(ss, 'SundayProposals', SUNDAY_PROPOSALS, false);
+  // ponytail: scan the small review queue; index it when the office outgrows this sheet.
+  var rows = sheet.getDataRange().getValues();
+  for (var i = 1; i < rows.length; i++) {
+    if (rows[i][0] !== op.mutationId) continue;
+    if (rows[i][1] !== sundayHash_(op)) throw new Error('Mutation ID was reused with different contents');
+    return sundayDecision_(state, sheet, i + 1, rows[i]);
+  }
+  // Pre-moderation writes may already have a durable receipt. Never reapply them.
+  var receipt = state.receipts[op.mutationId];
+  if (receipt) {
+    if (receipt.hash !== sundayHash_(op)) throw new Error('Mutation ID was reused with different contents');
+    return Object.assign(sundayReply_(op, receipt.record, true), {protocol: 4, status: 'approved'});
+  }
+  var current = state.records[op.table + '|' + op.id];
+  if ((current ? current.version : 0) !== op.baseVersion) {
+    return Object.assign(sundayReply_(op, current, false), {protocol: 4, status: 'conflict'});
+  }
+  if (rows.filter(function (r) { return r[9] === 'pending' || r[9] === 'approving'; }).length >= 1000) throw new Error('Review queue is full; draft remains on your device');
+  sheet.appendRow([op.mutationId, sundayHash_(op), new Date(), op.table, op.id, op.baseVersion,
+    current && !current.deleted ? JSON.stringify(current.row) : '', op.del ? '' : JSON.stringify(op.row),
+    op.del, 'pending', '', '', '']);
+  return {protocol: 4, ok: true, status: 'pending', table: op.table, id: op.id, mutationId: op.mutationId, error: null};
+}
+
+function onOpen() {
+  if (!sundayModerated_()) return;
+  SpreadsheetApp.getUi().createMenu('Sunday Open')
+    .addItem('Одобрить выбранную правку', 'approveSundayProposal')
+    .addItem('Отклонить выбранную правку', 'rejectSundayProposal').addToUi();
+}
+
+function approveSundayProposal() { return sundayReviewSelected_(true); }
+function rejectSundayProposal() { return sundayReviewSelected_(false); }
+
+function sundayReviewSelected_(approve) {
+  var email = sundayReviewUser_();
+  var ss = SpreadsheetApp.getActiveSpreadsheet(), sheet = ss.getActiveSheet(), range = sheet.getActiveRange();
+  if (ss.getId() !== SUNDAY_SPREADSHEET_ID || sheet.getName() !== 'SundayProposals' ||
+      !range || range.getRow() < 2 || range.getNumRows() !== 1) throw new Error('Select one proposal row in SundayProposals');
+  var lock = LockService.getScriptLock(); lock.waitLock(20000);
+  try {
+    var state = sundayRead_(ss), index = range.getRow();
+    var line = sheet.getRange(index, 1, 1, SUNDAY_PROPOSALS.length).getValues()[0];
+    sundayProposal_(line);
+    if (line[9] === 'pending') {
+      line[9] = approve ? 'approving' : 'rejected';
+      line[10] = new Date(); line[11] = email; line[12] = approve ? '' : 'Rejected by moderator';
+      sheet.getRange(index, 1, 1, SUNDAY_PROPOSALS.length).setValues([line]);
+      SpreadsheetApp.flush();
+    }
+    var result = sundayDecision_(state, sheet, index, line);
+    SpreadsheetApp.flush();
+    return result.status;
+  } finally { lock.releaseLock(); }
 }
 
 function setupSundayOpen() {
