@@ -1,0 +1,16 @@
+{
+  "site": "https://nalatka.github.io/sunday-open-test/",
+  "time": "2026-10-20T22:58:59.702Z",
+  "rowId": "steps-offline-1792537139702",
+  "dialogs": [
+    "beforeunload",
+    "beforeunload"
+  ],
+  "offlineShellReady": true,
+  "offlineReloadLoadsSite": true,
+  "offlineReloadRecovery": "passed",
+  "automaticSendOnReconnect": "passed",
+  "apiOutageReloadRecovery": "passed",
+  "offlineConflictPreservesBoth": "passed",
+  "cleanup": "temporary row removed"
+}
