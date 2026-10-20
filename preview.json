@@ -1,7 +1,7 @@
 {
   "spreadsheetId": "1SMOX1RNy7CipaqbvKmTLs-QYlSMZsgS0EIHH64pAsNs",
   "scriptId": "1XWdbT4QqPvW0Wf2yhqXN977yyHcDX-z04XdPSp8RNqhwIc5-pYZYpMwi",
-  "endpoint": "",
+  "endpoint": "https://script.google.com/macros/s/AKfycbzQtFu10Fjb1GoirZDyj1-xgX6VERsPz4MoAkxwiejNtsvPxANx_NOjDSaJe9WwLwOm/exec",
   "repository": "https://github.com/Nalatka/sunday-open-test",
   "site": "https://nalatka.github.io/sunday-open-test/"
 }
