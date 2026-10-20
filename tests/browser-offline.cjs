@@ -55,6 +55,9 @@ const snapshot = name => page.screenshot({path: path.join(out, name + '.png'), f
   });
   await page.goto(config.site, {waitUntil: 'domcontentloaded'});
   await waitSaved(); await field().waitFor();
+  await page.locator('#preview-offline-state').filter({hasText: 'Доступ без интернета готов'}).waitFor({timeout: 60000});
+  await page.waitForFunction(() => !!navigator.serviceWorker.controller);
+  report.offlineShellReady = true;
 
   // All browser network requests fail; server reads here use a separate Node client.
   await context.setOffline(true);
@@ -66,19 +69,24 @@ const snapshot = name => page.screenshot({path: path.join(out, name + '.png'), f
   assert.equal((await read()).row.who, 'TEST initial');
   await snapshot('01-offline-draft');
   console.log('PASS: offline edit persisted locally and did not reach the server.');
-  try {
-    await page.reload({waitUntil: 'domcontentloaded', timeout: 20000});
-    report.offlineReloadLoadsSite = await field().isVisible();
-  } catch (error) {
-    report.offlineReloadLoadsSite = false;
-    report.offlineReloadError = error.message.split('\n')[0];
-  }
+  await page.reload({waitUntil: 'domcontentloaded', timeout: 20000});
+  await field().waitFor(); assert.equal(await field().inputValue(), first);
+  assert.equal(await page.evaluate(() => navigator.onLine), false);
+  assert((await draft()).pending);
+  await page.locator('#preview-offline-state').filter({hasText: 'Без сети'}).waitFor();
+  report.offlineReloadLoadsSite = true;
+  const afterReload = 'TEST edited again while offline ' + id;
+  await field().fill(afterReload);
+  assert.equal((await draft()).who, afterReload);
+  await page.getByRole('button', {name: 'Запуск', exact: true}).click();
+  await page.evaluate(() => window.scrollTo(0, 0));
   await snapshot('02-offline-reload');
   await context.setOffline(false);
-  await page.goto(config.site, {waitUntil: 'domcontentloaded'});
-  await waitSaved(); assert.equal(await field().inputValue(), first);
-  assert.equal((await read()).row.who, first);
+  // No reload or retry button: the online event must flush the restored queue.
+  await waitSaved(); assert.equal(await field().inputValue(), afterReload);
+  assert.equal((await read()).row.who, afterReload);
   report.offlineReloadRecovery = 'passed';
+  report.automaticSendOnReconnect = 'passed';
   await snapshot('03-restored-and-saved');
   console.log('PASS: after offline reload and reconnect, the draft was recovered and acknowledged by the real TEST API.');
 
@@ -90,7 +98,7 @@ const snapshot = name => page.screenshot({path: path.join(out, name + '.png'), f
   await status().filter({hasText: 'Нет подтверждения сервера'}).waitFor({timeout: 30000});
   await page.reload({waitUntil: 'domcontentloaded'});
   await field().waitFor(); assert.equal(await field().inputValue(), second);
-  assert((await draft()).pending); assert.equal((await read()).row.who, first);
+  assert((await draft()).pending); assert.equal((await read()).row.who, afterReload);
   report.apiOutageReloadRecovery = 'passed';
   await snapshot('04-api-down-reloaded-draft');
 
