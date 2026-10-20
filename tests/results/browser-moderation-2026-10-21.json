@@ -1,0 +1,14 @@
+{
+  "site": "https://nalatka.github.io/sunday-open-test/",
+  "rowId": "steps-moderation-1792538998069",
+  "time": "2026-10-20T23:29:58.069Z",
+  "checks": {
+    "forgedApprovalCannotPublish": true,
+    "explicitApprovalPublishes": true,
+    "oldProtocolCannotPublish": true,
+    "rejectionKeepsDraftAndPublishedRow": true,
+    "offlineReloadStillRequiresApproval": true,
+    "approvalAcknowledgedByClient": true
+  },
+  "cleanup": "temporary published row removed"
+}
