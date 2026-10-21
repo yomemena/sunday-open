@@ -1,0 +1,15 @@
+{
+  "site": "https://nalatka.github.io/sunday-open-test/",
+  "time": "2026-10-20T21:41:16.570Z",
+  "rowId": "steps-offline-1792532476570",
+  "dialogs": [
+    "beforeunload",
+    "beforeunload"
+  ],
+  "offlineReloadLoadsSite": false,
+  "offlineReloadError": "page.reload: net::ERR_INTERNET_DISCONNECTED",
+  "offlineReloadRecovery": "passed",
+  "apiOutageReloadRecovery": "passed",
+  "offlineConflictPreservesBoth": "passed",
+  "cleanup": "temporary row removed"
+}
