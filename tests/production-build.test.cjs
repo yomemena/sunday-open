@@ -14,7 +14,8 @@ test('production Pages build requires approval, keeps production storage and iso
   assert(!template.includes('ТЕСТОВАЯ ВЕРСИЯ'));
   assert(template.includes('new WorkspaceSync({protocol:4,key:KEY'));
   assert(template.includes("const KEY='sunday-open-workspace-v1'"));
-  assert(template.includes('Правки видны команде только после одобрения'));
+  assert(!template.includes('Правки видны команде только после одобрения'));
+  assert(!template.includes('preview-offline-state'));
   const version = html.match(/workspace-sync\.([a-f0-9]{16})\.js/)[1];
   for (const file of [`workspace-sync.${version}.js`, `preview-offline.${version}.js`, 'offline-sw.js']) {
     assert(fs.existsSync(path.join(root, file)));

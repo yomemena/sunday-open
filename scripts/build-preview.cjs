@@ -26,7 +26,7 @@ template = template.replace(/const KEY='[^']+'/, `const KEY='${key}'`)
   .replace(/const SYNC_URL='[^']+'/, `const SYNC_URL='${production ? oldUrl : config.endpoint}'`)
   .replace(/<title>([^<]*)<\/title>/, (_, title) => `<title>${production ? title : 'Sunday Open TEST'}</title>`)
   .replace('</head>', '<script src="./preview-offline.__PREVIEW_VERSION__.js"></script></head>')
-  .replace('<body>', `<body><div style="${production ? 'background:#eef2f8;color:#2B3A8D;padding:8px 20px;text-align:center;font:13px sans-serif' : 'position:sticky;top:0;z-index:9999;background:#8b2c05;color:white;padding:12px 20px;text-align:center;font:bold 15px sans-serif'}">${production ? '' : 'ТЕСТОВАЯ ВЕРСИЯ · Отдельная копия данных · '}Правки видны команде только после одобрения<br><span id="preview-offline-state" aria-live="polite" style="font-weight:normal;font-size:13px">Подготавливаю доступ без интернета…</span></div>`);
+  .replace('<body>', production ? '<body>' : '<body><div style="position:sticky;top:0;z-index:9999;background:#8b2c05;color:white;padding:12px 20px;text-align:center;font:bold 15px sans-serif">ТЕСТОВАЯ ВЕРСИЯ · Отдельная копия данных · Правки видны команде только после одобрения<br><span id="preview-offline-state" aria-live="polite" style="font-weight:normal;font-size:13px">Подготавливаю доступ без интернета…</span></div>');
 // HTML closes a script element even when </script> occurs inside a JSON string.
 const encoded = JSON.stringify(template).replace(/</g, '\\u003c');
 let html = source.replace(pattern, (_, start, text, end) => start + encoded + end)
