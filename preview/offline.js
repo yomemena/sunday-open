@@ -1,8 +1,8 @@
 (() => {
   const label = document.getElementById('preview-offline-state');
-  if (!label) return;
   let ready = false;
   const render = () => {
+    if (!label) return;
     label.textContent = ready
       ? navigator.onLine ? 'Доступ без интернета готов' : 'Без сети · правки на устройстве, отправятся после подключения'
       : 'Подготавливаю доступ без интернета…';
@@ -11,7 +11,7 @@
   window.addEventListener('offline', render);
   render();
   if (!('serviceWorker' in navigator)) {
-    label.textContent = 'Этот браузер не поддерживает открытие сайта без интернета';
+    if (label) label.textContent = 'Этот браузер не поддерживает открытие сайта без интернета';
     return;
   }
   navigator.serviceWorker.register('./offline-sw.js', {scope: './', updateViaCache: 'none'})
@@ -23,5 +23,5 @@
     })
     .then(() => navigator.serviceWorker.ready)
     .then(() => { ready = true; render(); })
-    .catch(() => { label.textContent = 'Офлайн-копия пока не готова. Откройте сайт с интернетом ещё раз.'; });
+    .catch(() => { if (label) label.textContent = 'Офлайн-копия пока не готова. Откройте сайт с интернетом ещё раз.'; });
 })();

@@ -4,6 +4,16 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const source = fs.readFileSync(require('node:path').join(__dirname, '../preview/offline-sw.js'), 'utf8');
 
+test('offline installation still runs when its visible status label is removed', async () => {
+  let registrations = 0;
+  vm.runInNewContext(fs.readFileSync(require('node:path').join(__dirname, '../preview/offline.js'), 'utf8'), {
+    document: {getElementById: () => null}, window: {addEventListener: () => {}},
+    navigator: {serviceWorker: {register: async () => { registrations++; }, ready: Promise.resolve()}}
+  });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(registrations, 1);
+});
+
 test('offline shell caches only its static files and preserves the active version until tabs close', async () => {
   const scope = 'https://nalatka.github.io/sunday-open-test/';
   const events = {}, cached = new Map(), removed = [], requests = [];
