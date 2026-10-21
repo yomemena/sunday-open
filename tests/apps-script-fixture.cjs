@@ -7,9 +7,10 @@ const clone = value => JSON.parse(JSON.stringify(value));
 function server(seed, legacy) {
   const sheets = new Map(), properties = new Map(), posts = [];
   let locked = false;
-  const backend = {posts, sheets, properties, failProjection: false, actor: '', selectedRow: 2};
+  const backend = {posts, sheets, properties, failProjection: false, actor: '', selectedRow: 2,
+    emails: [], triggers: [], mailQuota: 100, failMail: false, failNotificationReceipt: false};
   function sheet(name, rows = []) {
-    const value = {name, rows: clone(rows), getName() { return name; },
+    const value = {name, rows: clone(rows), getName() { return name; }, getSheetId: () => 123,
       getActiveRange: () => ({getRow: () => backend.selectedRow, getNumRows: () => 1}),
       setFrozenRows() {}, getLastRow() { return this.rows.length; },
       appendRow(row) {
@@ -22,6 +23,7 @@ function server(seed, legacy) {
         getValues: () => Array.from({length: height}, (_, i) => Array.from({length: width}, (_, j) => this.rows[r+i-1]?.[c+j-1] ?? '')),
         setValues: values => {
           if (!locked) throw new Error('Write without lock');
+          if (name === 'SundayNotifications' && backend.failNotificationReceipt) { backend.failNotificationReceipt = false; throw new Error('receipt interrupted'); }
           if (name === 'Data' && backend.failProjection) { backend.failProjection = false; throw new Error('projection interrupted'); }
           values.forEach((row, i) => row.forEach((cell, j) => { this.rows[r+i-1] ||= []; this.rows[r+i-1][c+j-1] = clone(cell); }));
         }
@@ -36,7 +38,18 @@ function server(seed, legacy) {
     getId: () => context.SUNDAY_SPREADSHEET_ID, getActiveSheet: () => sheets.get('SundayProposals')};
   const context = vm.createContext({Date, JSON, Object, Number, Error,
     SpreadsheetApp: {openById: () => spreadsheet, getActiveSpreadsheet: () => spreadsheet, flush() {}},
-    Session: {getActiveUser: () => ({getEmail: () => backend.actor})},
+    Session: {getActiveUser: () => ({getEmail: () => backend.actor}), getEffectiveUser: () => ({getEmail: () => backend.actor})},
+    console: {log() {}},
+    MailApp: {getRemainingDailyQuota: () => backend.mailQuota, sendEmail: message => {
+      if (backend.failMail) throw new Error('mail unavailable');
+      if (backend.mailQuota < 1) throw new Error('mail quota');
+      backend.emails.push(clone(message)); backend.mailQuota--;
+    }},
+    ScriptApp: {getProjectTriggers: () => backend.triggers, newTrigger: handler => {
+      const builder = {timeBased() { return this; }, everyMinutes(n) { this.minutes = n; return this; },
+        create() { backend.triggers.push({getHandlerFunction: () => handler, minutes: this.minutes}); }};
+      return builder;
+    }},
     LockService: {getScriptLock: () => ({
       tryLock() { if (locked) return false; locked = true; return true; },
       waitLock() { if (locked) throw new Error('busy'); locked = true; }, releaseLock() { locked = false; }
