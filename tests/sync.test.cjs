@@ -197,7 +197,7 @@ test('unmount cancels timers and unsaved changes trigger unload warning', async 
 });
 
 test('embedded component uses stable row IDs and actual sync module', async () => {
-  const html = fs.readFileSync(path.join(__dirname, '../index.html'), 'utf8');
+  const html = fs.readFileSync(path.join(__dirname, '../src/index.html'), 'utf8');
   assert.match(html, /<script src="\.\/workspace-sync\.js"><\/script>/);
   const template = JSON.parse(html.match(/<script type="__bundler\/template">\s*([\s\S]*?)\s*<\/script>/)[1]);
   const code = template.match(/<script type="text\/x-dc"[^>]*>([\s\S]*?)<\/script>/)[1];

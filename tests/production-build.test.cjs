@@ -7,7 +7,7 @@ const {execFileSync} = require('node:child_process');
 test('production Pages build requires approval, keeps production storage and isolates test data', () => {
   const root = path.join(__dirname, '..');
   execFileSync(process.execPath, ['scripts/build-preview.cjs', '--production'], {cwd: root});
-  const html = fs.readFileSync(path.join(root, 'docs/index.html'), 'utf8');
+  const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
   const template = JSON.parse(html.match(/<script type="__bundler\/template">\s*([\s\S]*?)\s*<\/script>/)[1]);
   const preview = JSON.parse(fs.readFileSync(path.join(root, 'preview.json')));
   assert(!html.includes(preview.endpoint));
@@ -17,9 +17,9 @@ test('production Pages build requires approval, keeps production storage and iso
   assert(template.includes('Правки видны команде только после одобрения'));
   const version = html.match(/workspace-sync\.([a-f0-9]{16})\.js/)[1];
   for (const file of [`workspace-sync.${version}.js`, `preview-offline.${version}.js`, 'offline-sw.js']) {
-    assert(fs.existsSync(path.join(root, 'docs', file)));
+    assert(fs.existsSync(path.join(root, file)));
   }
-  const worker = fs.readFileSync(path.join(root, 'docs/offline-sw.js'), 'utf8');
+  const worker = fs.readFileSync(path.join(root, 'offline-sw.js'), 'utf8');
   assert(worker.includes('sunday-open-shell:'));
   assert(worker.includes(`workspace-sync.${version}.js`));
   assert(!worker.includes('__PREVIEW_VERSION__'));
