@@ -4,6 +4,7 @@ var SUNDAY_SPREADSHEET_ID = '1Z0-M7YVVZqGpFVCQXRXdZwjF-T3G5qxgkCFTU3QbJX0';
 var SUNDAY_DATA = ['table', 'id', 'version', 'json', 'deleted', 'updatedAt'];
 var SUNDAY_HISTORY = ['mutationId', 'hash', 'time', 'table', 'id', 'action', 'baseVersion', 'version', 'before', 'after'];
 var SUNDAY_PROPOSALS = ['mutationId', 'hash', 'createdAt', 'table', 'id', 'baseVersion', 'before', 'after', 'delete', 'status', 'reviewedAt', 'reviewedBy', 'reason'];
+var SUNDAY_NOTIFICATIONS = ['mutationId', 'notifiedAt'];
 
 function sundayModerated_() {
   return PropertiesService.getScriptProperties().getProperty('SUNDAY_MODERATION') === '4';
@@ -178,6 +179,87 @@ function sundayProposal_(line) {
   sundayValidate_(op);
   if (sundayHash_(op) !== line[1]) throw new Error('Invalid proposal hash');
   return op;
+}
+
+// Run once as the moderator who should receive the emails. The address stays private.
+function setupSundayNotifications() {
+  var email = sundayReviewUser_(), properties = PropertiesService.getScriptProperties();
+  if (!sundayModerated_()) throw new Error('Enable moderation first');
+  MailApp.getRemainingDailyQuota(); // Request mail permission before installing the trigger.
+  var lock = LockService.getScriptLock(); lock.waitLock(20000);
+  try {
+    var existing = properties.getProperty('SUNDAY_NOTIFICATION_EMAIL');
+    if (existing && existing !== email) throw new Error('Notifications already belong to another moderator');
+    sundaySheet_(SpreadsheetApp.openById(SUNDAY_SPREADSHEET_ID), 'SundayNotifications', SUNDAY_NOTIFICATIONS, true);
+    SpreadsheetApp.flush();
+    properties.setProperty('SUNDAY_NOTIFICATION_EMAIL', email);
+    var installed = ScriptApp.getProjectTriggers().some(function (trigger) {
+      return trigger.getHandlerFunction() === 'sendSundayNotifications';
+    });
+    if (!installed) ScriptApp.newTrigger('sendSundayNotifications').timeBased().everyMinutes(5).create();
+    console.log('Notifications ready: ' + email + ', every 5 minutes.');
+  } finally { lock.releaseLock(); }
+}
+
+function sundayNotificationRecipient_() {
+  var properties = PropertiesService.getScriptProperties();
+  var email = properties.getProperty('SUNDAY_NOTIFICATION_EMAIL');
+  var allowed = JSON.parse(properties.getProperty('SUNDAY_MODERATOR_EMAILS') || '[]');
+  if (!email || email !== Session.getEffectiveUser().getEmail().trim().toLowerCase() ||
+      !Array.isArray(allowed) || !allowed.some(function (x) { return typeof x === 'string' && x.trim().toLowerCase() === email; })) {
+    throw new Error('Run notifications as their configured moderator');
+  }
+  return email;
+}
+
+function sundayReviewLink_(sheet) {
+  return 'https://docs.google.com/spreadsheets/d/' + SUNDAY_SPREADSHEET_ID + '/edit#gid=' + sheet.getSheetId();
+}
+
+// Independent of doPost: mail failures never undo a saved proposal.
+function sendSundayNotifications() {
+  if (!PropertiesService.getScriptProperties().getProperty('SUNDAY_NOTIFICATION_EMAIL')) return 'Disabled';
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(20000)) return 'Busy; retry on the next trigger';
+  try {
+    var email = sundayNotificationRecipient_();
+    if (!sundayModerated_()) throw new Error('Moderation is not enabled');
+    var ss = SpreadsheetApp.openById(SUNDAY_SPREADSHEET_ID);
+    var proposals = sundaySheet_(ss, 'SundayProposals', SUNDAY_PROPOSALS, false);
+    var receipts = sundaySheet_(ss, 'SundayNotifications', SUNDAY_NOTIFICATIONS, false);
+    // ponytail: scan the small queue/receipt log; index them if the office outgrows Sheets.
+    var sent = new Set(receipts.getDataRange().getValues().slice(1).map(function (r) { return r[0]; }));
+    var pending = proposals.getDataRange().getValues().slice(1).filter(function (r) {
+      return r[9] === 'pending' && !sent.has(r[0]);
+    });
+    if (!pending.length) return 'No new proposals';
+    pending.forEach(sundayProposal_);
+    if (MailApp.getRemainingDailyQuota() < 1) return 'Email quota exhausted; retry later';
+    var summary = pending.slice(0, 20).map(function (r) {
+      return '• ' + r[3] + ' / ' + r[4] + (r[8] === true || r[8] === 'TRUE' ? ' — удаление' : ' — изменение');
+    }).join('\n');
+    MailApp.sendEmail({to: email, name: 'Sunday Open',
+      subject: 'Sunday Open: новые правки на одобрение — ' + pending.length,
+      body: 'Новых правок: ' + pending.length + '. Они ещё ожидают одобрения.\n\nОткрыть очередь:\n' +
+        sundayReviewLink_(proposals) + '\n\n' + summary + (pending.length > 20 ? '\nОстальные правки — в таблице.' : '') +
+        '\n\nВыберите одну строку со статусом pending, затем меню Sunday Open → Одобрить выбранную правку или Отклонить выбранную правку.\nК моменту открытия таблицы часть правок уже может быть рассмотрена.'});
+    // Receipt follows send: a failure retries instead of silently losing an alert.
+    // A process crash between mail and receipt can cause a duplicate digest.
+    var now = new Date();
+    receipts.getRange(receipts.getLastRow() + 1, 1, pending.length, 2).setValues(pending.map(function (r) { return [r[0], now]; }));
+    SpreadsheetApp.flush();
+    console.log('Notification sent for ' + pending.length + ' new proposals.');
+    return 'Sent: ' + pending.length;
+  } finally { lock.releaseLock(); }
+}
+
+function sendSundayNotificationTest() {
+  sundayReviewUser_();
+  var email = sundayNotificationRecipient_();
+  var sheet = sundaySheet_(SpreadsheetApp.openById(SUNDAY_SPREADSHEET_ID), 'SundayProposals', SUNDAY_PROPOSALS, false);
+  MailApp.sendEmail({to: email, name: 'Sunday Open', subject: 'Sunday Open: проверка уведомлений',
+    body: 'Это проверочное письмо. Уведомления о новых правках проверяются примерно раз в 5 минут.\n\nОчередь одобрения:\n' + sundayReviewLink_(sheet) + '\n\nЭто письмо не создаёт правок и не меняет данные сайта.'});
+  console.log('Test notification sent to ' + email);
 }
 
 function sundayDecision_(state, sheet, index, line) {
